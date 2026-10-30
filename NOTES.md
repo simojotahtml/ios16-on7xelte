@@ -1,5 +1,11 @@
 # iOS 16 on sweet (Redmi Note 10 Pro, SM7150) - working notes
 
+## on7xelte J7 Prime GPU/audio/performance handoff (2026-10-30)
+
+The local J7 bundle has `cpus=8` and `j7gpu=7`. Patches `0302`–`0311` bring up the Mali-T830 and expose a kernel user client, but the user-space `j7gputest.c` only exercises WRITE_VALUE jobs; there is no OpenGL/Metal renderer wired into CoreAnimation. `sweetgl.dylib` is not a graphics driver yet. A separate candidate boot image, `local-build/j7-ios16.7.16-20H392-d21ap/boot-performance.img`, derives from the local bundle with `emmcfast=1` and `-enable_kprintf_spam` removed. The image was locally checked for embedded args and Android boot digest; it has not been flashed or measured on-device. `tools/j7-bootargs.py` reproduces the edit.
+
+The J7 Linux sources identify COD3026X on S3C2440 I2C at `0x13870000` (codec `0x04`, IRQ 428), with I2S0 at `0x148a0000` (IRQ 69) and ADMA at `0x14890000` (IRQ 73). No J7 XNU audio engine or iOS HAL exists. The `~/hackios` audio plug-in is backed by Qualcomm DSP/Awinic hardware and cannot serve as this phone's driver. Details: `docs/j7-performance-audio.md`.
+
 ## a5xelte fork handoff (2026-10-20)
 
 The Samsung SM-A510F branch has a separate dated record in `A5XELTE_PROGRESS.md` and a donor replacement map in `docs/a5xelte-migration-map.md`. Its 4 KiB XNU boots four Exynos7580 cores with SGI1 verified, mounts an iOS 16 HFSX root from USERDATA, and executes launchd, SpringBoard and backboardd. A graphical SpringBoard frame remains unverified. The latest recovered log confirms backboardd has its stock system-container XML entitlement, yet it crashes after receiving a missing container path; `lsd` also aborts in system-group container URL initialization. The HFS `RENAME_SWAP` fallback was SWEET-only despite A5XELTE usermanagerd reporting ENOTSUP for atomic keybag writes. Patch `0117` enables the existing fallback for A5XELTE, and its four-core BOOT image was written to p10; the runtime log is pending. Recovery and EFS remain untouched. The SWEET notes below are donor history, not Samsung device results.
