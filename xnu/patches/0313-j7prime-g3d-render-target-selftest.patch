@@ -10,7 +10,7 @@ the current job-manager-only test before attempting a display bridge.
 diff --git a/iokit/Kernel/arm/A5XELTEGPU.cpp b/iokit/Kernel/arm/A5XELTEGPU.cpp
 --- a/iokit/Kernel/arm/A5XELTEGPU.cpp
 +++ b/iokit/Kernel/arm/A5XELTEGPU.cpp
-@@ -1215,2 +1215,50 @@
+@@ -1218,2 +1218,50 @@
      }
 +    if (ok) {
 +        /* Midgard v5 MFBD clear: 16x16 RGBA8 target, FBD/poly/pixels page-separated. */
