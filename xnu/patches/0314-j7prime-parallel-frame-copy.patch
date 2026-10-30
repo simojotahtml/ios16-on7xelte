@@ -2,9 +2,9 @@ From: j7 performance
 Subject: j7prime: scale framebuffer copy workers to active CPUs
 
 The lockscreen currently reaches scanout through the CPU framebuffer path. Reuse
-the row-band copier from the HEROLTE port on A5XELTE builds, choosing up to three
-helper threads from the CPUs XNU actually brought online. That gives one helper
-on a two-CPU boot and up to three on the J7's eight-CPU profile.
+the row-band copier from the HEROLTE port on A5XELTE builds, choosing helpers
+from the CPUs XNU actually brought online. That gives one helper on a two-CPU
+boot and up to seven on the J7's eight-CPU profile.
 sweetfb_copythreads=0 keeps the serial memcpy path; a positive override can lower
 the automatic count but is capped below the number of active CPUs and at the
 worker-array limit. This speeds only the final framebuffer copy, not CoreAnimation's

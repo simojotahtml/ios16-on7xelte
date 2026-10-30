@@ -63,6 +63,6 @@ hookable GLES path. A Mali job test or faster framebuffer copy alone is not
 evidence that the lock screen is GPU-rendered.
 
 Patch `0314` is a separate CPU-side experiment: it reuses the HEROLTE row-band
-copy worker for J7 scanout, scaling up to three helpers according to XNU's
+copy worker for J7 scanout, scaling up to seven helpers according to XNU's
 active CPU count. It may reduce the final presentation copy cost, but leaves
 the software renderer intact and has not been built or measured on the phone.
