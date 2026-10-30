@@ -1,0 +1,63 @@
+From: j7 g3d
+Subject: j7prime: render a private RGBA target on Mali-T830 at boot
+
+The J7 path currently proves only Mali WRITE_VALUE jobs. Reuse the known
+Midgard v5 multi-framebuffer descriptor layout from the A5XELTE T880 test to
+submit a one-tile fragment clear into a private user-client BO. No panel memory
+or IOSurface is touched. This distinguishes a functioning render pipeline from
+the current job-manager-only test before attempting a display bridge.
+
+diff --git a/iokit/Kernel/arm/A5XELTEGPU.cpp b/iokit/Kernel/arm/A5XELTEGPU.cpp
+--- a/iokit/Kernel/arm/A5XELTEGPU.cpp
++++ b/iokit/Kernel/arm/A5XELTEGPU.cpp
+@@ -1215,2 +1215,50 @@
+     }
++    if (ok) {
++        /* Midgard v5 MFBD clear: 16x16 RGBA8 target, FBD/poly/pixels page-separated. */
++        const uint64_t fbdVA = gva + 0x1000, polyVA = gva + 0x2000, pixelsVA = gva + 0x3000;
++        bzero(mem, 0x4000);
++        volatile uint32_t *job = reinterpret_cast<volatile uint32_t *>(mem);
++        volatile uint32_t *fb = reinterpret_cast<volatile uint32_t *>(mem + 0x1000);
++        volatile uint32_t *poly = reinterpret_cast<volatile uint32_t *>(mem + 0x2000);
++        volatile uint32_t *pixels = reinterpret_cast<volatile uint32_t *>(mem + 0x3000);
++        const uint32_t color = 0xff0000ffu; /* RGBA8 red in the tested Panfrost layout */
++        for (unsigned i = 0; i < 256; i++) { pixels[i] = 0xa5a5a5a5u; }
++        job[4] = 0x00010013u;                         /* FRAGMENT, index 1, 64-bit */
++        job[8] = 0;                                   /* min tile bounds */
++        job[9] = 0;                                   /* one 16x16 tile */
++        *reinterpret_cast<volatile uint64_t *>(job + 10) = fbdVA | 1; /* MFBD, one RT */
++        fb[1] = 31;                                   /* local storage */
++        fb[8] = (15u << 16) | 15u;                    /* width/height - 1 */
++        fb[9] = 0;
++        fb[10] = (15u << 16) | 15u;                   /* pixel bounds */
++        fb[11] = (2u << 6) | (8u << 9) | (1u << 24); /* tile and color allocation */
++        fb[12] = 0;
++        fb[13] = 0;
++        fb[14] = 516;                                 /* empty polygon list */
++        fb[15] = 4095;                                /* hierarchy disabled */
++        *reinterpret_cast<volatile uint64_t *>(fb + 16) = polyVA;
++        *reinterpret_cast<volatile uint64_t *>(fb + 18) = polyVA + 512;
++        *reinterpret_cast<volatile uint64_t *>(fb + 20) = polyVA;
++        *reinterpret_cast<volatile uint64_t *>(fb + 22) = polyVA;
++        volatile uint32_t *rt = fb + 32;
++        rt[0] = 1u << 26;                             /* RGBA8 internal format */
++        rt[1] = 1u | (19u << 3) | (2u << 10) | (1u << 15) |
++            (0x688u << 16) | (1u << 31);              /* linear RGBA8 write */
++        *reinterpret_cast<volatile uint64_t *>(rt + 8) = pixelsVA;
++        rt[10] = 64;                                  /* 16 pixels * 4 bytes */
++        rt[11] = 0;
++        for (unsigned i = 0; i < 4; i++) { rt[12 + i] = color; }
++        poly[128] = 0xa0000000u;
++        __sync_synchronize();
++        uint64_t in[2] = { 0, gva }, out[2] = { 0, 0 };
++        IOReturn submit = j7m_call(c, 2, in, 2, out, 1);
++        in[0] = 500000;
++        IOReturn wait = submit == kIOReturnSuccess ? j7m_call(c, 3, in, 1, out, 2) : submit;
++        unsigned rendered = 0;
++        for (unsigned i = 0; i < 256; i++) { rendered += pixels[i] == color; }
++        const int status = static_cast<int>(static_cast<int64_t>(out[0]));
++        IOLog("J7 G3D: fragment selftest submit=%x wait=%x status=%d pixels=%u/256 first=%08x last=%08x\n",
++            submit, wait, status, rendered, pixels[0], pixels[255]);
++        ok = submit == kIOReturnSuccess && wait == kIOReturnSuccess && status == 0 && rendered == 256;
++    }
+     /* A submit for a VA this client never mapped must be refused. */

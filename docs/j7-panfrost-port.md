@@ -21,8 +21,11 @@ With `j7gpu=7`, `J7MaliUserClient` provides:
 | 5 | Send bounded text to the kernel log |
 
 The service uses one address space and one global in-flight job. Its current
-client self-test submits only Mali WRITE_VALUE jobs. It does not create
-CoreSurface-backed buffers, expose DRM ioctls, or render pixels.
+client self-test submits Mali WRITE_VALUE jobs. Patch `0313` now adds a
+candidate Midgard v5 one-tile fragment clear into a private 16x16 RGBA target
+and counts the resulting pixels. This is a boot-time driver diagnostic, not a
+screen acceleration path; it is not yet XNU-built or hardware-verified. The
+service still does not create CoreSurface-backed buffers or expose DRM ioctls.
 
 ## Mesa compatibility work identified
 
@@ -37,9 +40,9 @@ import/export, eviction, heap-on-fault, and concurrent jobs for this first
 serialized path.
 
 The integration still needs a Mesa winsys entry that talks to
-`J7MaliUserClient`, correct cache ownership around IOSurface buffers, and an
-offscreen rendered-pixel test. Only after that passes should a surface be
-presented to the Samsung scanout buffer.
+`J7MaliUserClient`, correct cache ownership around IOSurface buffers, and
+on-device verification that patch `0313` produces all expected pixels. Only
+after that passes should a surface be presented to the Samsung scanout buffer.
 
 ## UI limit
 
