@@ -1,0 +1,106 @@
+From: j7 input
+Subject: j7prime: configure Synaptics RMI4 F12 touch reports
+
+Configure F12 Control 28 to report type, X/Y and WX/WY, matching the
+on7xelte Synaptics driver setup. Parse Control 28's offset from the F12
+register descriptors. Use seven-byte records and read all five contacts.
+
+diff --git a/bsd/dev/a5xelte_touch.c b/bsd/dev/a5xelte_touch.c
+--- a/bsd/dev/a5xelte_touch.c
++++ b/bsd/dev/a5xelte_touch.c
+@@ -650,6 +650,7 @@ static struct j7t_fn j7t_f01, j7t_f12;
+ static uint8_t j7t_f12_mask[4];
+ static unsigned j7t_d1_offset;
+ static unsigned j7t_con = 0xe1u;   /* ACK, PCLK/512, IRQ flag, divider 1 */
+-static unsigned j7t_nobj = 2;      /* finger objects read per attention */
++static uint16_t j7t_f12_ctrl28_addr;
++static const unsigned j7t_f12_object_size = 7; /* type, X/Y, WX/WY */
+ static bool j7t_active[J7T_FINGERS];
+ static uint16_t j7t_x[J7T_FINGERS], j7t_y[J7T_FINGERS];
+@@ -930,6 +930,11 @@ j7t_configure(void)
+ 	uint8_t ctrl0 = 0;
+ 	uint8_t en[3] = {0, 0, 0};
+ 	uint8_t status[4] = {0, 0, 0, 0};
++	const uint8_t report = 0xdfu; /* type, X/Y and WX/WY fields */
++	if (j7t_f12_ctrl28_addr == 0 || !j7t_write(j7t_f12_ctrl28_addr, &report, 1)) {
++		printf("J7 TOUCH: F12 Control 28 report setup failed at %#x\n", j7t_f12_ctrl28_addr);
++		return false;
++	}
+ 	if (!j7t_read(j7t_f01.ctrl, &ctrl0, 1) ||
+ 	    !j7t_read((uint16_t)(j7t_f01.ctrl + 1), en, j7t_irq_regs)) {
+ 		return false;
+@@ -1037,9 +1037,8 @@ j7t_report(const uint8_t *o, int verbose)
+ {
+ 	static unsigned lines;
+-	int highest = -1;
+ 	for (unsigned slot = 0; slot < J7T_FINGERS; slot++) {
+-		const uint8_t *p = o + slot * 8;
+-		unsigned type = p[0];
++		const uint8_t *p = o + slot * j7t_f12_object_size;
++		unsigned type = p[0] & 0x07u;
+ 		unsigned x = (unsigned)p[1] | ((unsigned)p[2] << 8);
+ 		unsigned y = (unsigned)p[3] | ((unsigned)p[4] << 8);
+ 		bool active = (type == 1 || type == 6) && x <= 1080 && y <= 1920;
+@@ -1050,8 +1050,8 @@ j7t_report(const uint8_t *o, int verbose)
+ 		if (active) {
+ 			if ((verbose || lines < 128) && (!j7t_active[slot] ||
+ 			    j7t_x[slot] != x || j7t_y[slot] != y)) {
+-				printf("J7 TOUCH: contact slot=%u type=%u x=%u y=%u z=%u\n",
+-				    slot, type, x, y, p[5]);
++				printf("J7 TOUCH: contact slot=%u type=%u x=%u y=%u wx=%u wy=%u\n",
++				    slot, type, x, y, p[5], p[6]);
+ 				lines++;
+ 			}
+ 			j7t_x[slot] = (uint16_t)x;
+@@ -1060,12 +1060,4 @@ j7t_report(const uint8_t *o, int verbose)
+ 			j7t_active[slot] = false;
+ 		}
+ 	}
+-	/* Next time read one slot past the highest finger, at least two. */
+-	j7t_nobj = (unsigned)(highest + 2);
+-	if (j7t_nobj < 2) {
+-		j7t_nobj = 2;
+-	}
+-	if (j7t_nobj > J7T_FINGERS) {
+-		j7t_nobj = J7T_FINGERS;
+-	}
+ }
+@@ -1072,7 +1072,21 @@ j7t_hw_init(void)
+ 	j7t_d1_offset = 0;
+ 	if (j7t_f12_parse(q, desc)) {
+ 		j7t_d1_offset = desc[2].has[0] ? (unsigned)desc[2].size[0] : 0u;
++		if (!desc[1].has[28] || desc[1].size[28] < 1) {
++			printf("J7 TOUCH: F12 Control 28 missing from descriptor\n");
++			goto fail;
++		}
++		unsigned ctrl28_offset = 0;
++		for (unsigned r = 0; r < 28; r++) {
++			if (desc[1].has[r]) {
++				ctrl28_offset += desc[1].size[r];
++			}
++		}
++		j7t_f12_ctrl28_addr = (uint16_t)(j7t_f12.ctrl + ctrl28_offset);
++		printf("J7 TOUCH: F12 Control 28 at %#x size=%u, Data 1 stride=%u\n",
++		    j7t_f12_ctrl28_addr, desc[1].size[28], j7t_f12_object_size);
+ 	} else {
+-		printf("J7 TOUCH: F12 descriptors not understood, assuming finger data at +0\n");
++		printf("J7 TOUCH: F12 descriptors not understood\n");
++		goto fail;
+ 	}
+ 
+@@ -1204,11 +1204,7 @@ j7t_thread(void *arg, wait_result_t result)
+ 		}
+ 		if (attn) {
+-			uint8_t o[J7T_FINGERS * 8];
+-			unsigned nobj = j7t_nobj;
+-			for (unsigned i = nobj * 8; i < sizeof(o); i++) {
++			uint8_t o[J7T_FINGERS * 7];
+-				o[i] = 0;
+-			}
+-			if (j7t_read((uint16_t)(j7t_f12.data + j7t_d1_offset), o, nobj * 8)) {
++			if (j7t_read((uint16_t)(j7t_f12.data + j7t_d1_offset), o, sizeof(o))) {
+ 				if (verbose) {
+-					printf("J7 TOUCH: raw %02x %02x %02x %02x %02x %02x %02x %02x\n",
+-					    o[0], o[1], o[2], o[3], o[4], o[5], o[6], o[7]);
++					printf("J7 TOUCH: raw %02x %02x %02x %02x %02x %02x %02x\n",
++					    o[0], o[1], o[2], o[3], o[4], o[5], o[6]);
