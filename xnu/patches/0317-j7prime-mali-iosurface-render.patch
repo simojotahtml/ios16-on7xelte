@@ -1,0 +1,99 @@
+From: j7 g3d
+Subject: j7prime: render a bounded Mali tile into an IOSurface
+
+Add a constrained render operation for the T830 user client and exercise it
+from the existing backboardd diagnostic using a private 16x16 IOSurface. This
+connects the GPU job path to IOSurface storage and checks the resulting pixels
+after cache maintenance. It is a hardware-rendering primitive and diagnostic,
+not yet a CoreAnimation renderer.
+
+diff --git a/iokit/Kernel/arm/A5XELTEGPU.cpp b/iokit/Kernel/arm/A5XELTEGPU.cpp
+--- a/iokit/Kernel/arm/A5XELTEGPU.cpp
++++ b/iokit/Kernel/arm/A5XELTEGPU.cpp
+@@ -1166,6 +1166,86 @@ J7MaliUserClient::externalMethod(uint32_t selector, IOExternalMethodArguments *args,
+             ret = kIOReturnSuccess;
+         }
+         break;
++    case 7:     /* render a 16x16 RGBA8 clear into an imported private IOSurface */
++        if (args->scalarInputCount == 2 && args->scalarOutputCount >= 1) {
++            struct J7MaliBo *target = NULL;
++            const uint64_t targetVA = args->scalarInput[0];
++            for (unsigned i = 0; i < J7M_MAX_BOS; i++) {
++                struct J7MaliBo &b = gJ7M.bos[i];
++                if (b.used && b.owner == this && b.surface != NULL && b.start == targetVA) {
++                    target = &b;
++                    break;
++                }
++            }
++            SweetSurface *s = target ? target->surface : NULL;
++            /* Keep this diagnostic isolated to a caller-created 16x16, 4-byte surface. */
++            if (s == NULL || s->width != 16 || s->height != 16 ||
++                s->bytesPerElement != 4 || s->elementWidth != 1 || s->elementHeight != 1 ||
++                s->bytesPerRow < 64 || s->offset > target->size ||
++                (uint64_t)s->offset + (uint64_t)s->bytesPerRow * 15 + 64 > target->size) {
++                ret = kIOReturnBadArgument;
++                break;
++            }
++
++            /* Job/FBD/poly descriptors live in private mapped memory; pixels stay in IOSurface. */
++            struct J7MaliBo *meta = j7m_bo_new(0x4000);
++            if (meta == NULL) {
++                ret = kIOReturnNoResources;
++                break;
++            }
++            uint8_t *mem = static_cast<uint8_t *>(meta->md->getBytesNoCopy());
++            bzero(mem, 0x4000);
++            volatile uint32_t *job = reinterpret_cast<volatile uint32_t *>(mem);
++            volatile uint32_t *fb = reinterpret_cast<volatile uint32_t *>(mem + 0x1000);
++            volatile uint32_t *poly = reinterpret_cast<volatile uint32_t *>(mem + 0x2000);
++            const uint32_t color = static_cast<uint32_t>(args->scalarInput[1]);
++            const uint64_t fbdVA = meta->va + 0x1000;
++            const uint64_t polyVA = meta->va + 0x2000;
++            job[4] = 0x00010013u;                    /* fragment, index 1, 64-bit */
++            job[8] = 0;
++            job[9] = 0;
++            *reinterpret_cast<volatile uint64_t *>(job + 10) = fbdVA | 1; /* MFBD, one RT */
++            fb[1] = 31;
++            fb[8] = (15u << 16) | 15u;
++            fb[9] = 0;
++            fb[10] = (15u << 16) | 15u;
++            fb[11] = (2u << 6) | (8u << 9) | (1u << 24);
++            fb[14] = 516;
++            fb[15] = 4095;
++            *reinterpret_cast<volatile uint64_t *>(fb + 16) = polyVA;
++            *reinterpret_cast<volatile uint64_t *>(fb + 18) = polyVA + 512;
++            *reinterpret_cast<volatile uint64_t *>(fb + 20) = polyVA;
++            *reinterpret_cast<volatile uint64_t *>(fb + 22) = polyVA;
++            volatile uint32_t *rt = fb + 32;
++            rt[0] = 1u << 26;                        /* RGBA8 internal format */
++            rt[1] = 1u | (19u << 3) | (2u << 10) | (1u << 15) |
++                (0x688u << 16) | (1u << 31);          /* linear RGBA8 write */
++            *reinterpret_cast<volatile uint64_t *>(rt + 8) = target->va + s->offset;
++            rt[10] = s->bytesPerRow;
++            rt[11] = 0;
++            for (unsigned i = 0; i < 4; i++) { rt[12 + i] = color; }
++            poly[128] = 0xa0000000u;
++            meta->md->performOperation(kIOMemoryIncoherentIOStore, 0, meta->size);
++            __sync_synchronize();
++            j7m_cache(kIOMemoryIncoherentIOStore);
++            uint32_t seq = 0;
++            bool ok = j7m_submit(0, meta->va, &seq);
++            const int wait = ok ? j7m_wait(500000) : -1;
++            j7m_cache(kIOMemoryIncoherentIOFlush);
++            if (wait != 0 && !j7m_recover()) {
++                gJ7MServing = false;
++                IOLog("J7 G3D: recovery failed after IOSurface render\n");
++            }
++            j7m_bo_free(meta);
++            if (!ok || wait != 0) {
++                ret = kIOReturnIOError;
++                break;
++            }
++            args->scalarOutput[0] = seq;
++            args->scalarOutputCount = 1;
++            ret = kIOReturnSuccess;
++        }
++        break;
+     default:
+         break;
+     }

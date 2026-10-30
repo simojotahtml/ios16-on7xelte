@@ -27,7 +27,7 @@ jobs:
           mkdir -p out
           xcrun -sdk iphoneos clang -arch arm64 -miphoneos-version-min=16.0 -O2 -Wall -fvisibility=hidden \
             -dynamiclib -install_name /usr/lib/sweetgl.dylib \
-            -framework IOKit -framework CoreFoundation \
+            -framework IOKit -framework IOSurface -framework CoreFoundation \
             tools/j7gpu/j7gputest.c -o out/sweetgl-unpadded.dylib
           codesign -f -s - out/sweetgl-unpadded.dylib
           lipo -info out/sweetgl-unpadded.dylib

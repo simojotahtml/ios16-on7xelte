@@ -11,6 +11,7 @@
  * the root image reserves, so tools/j7-push-lib.py can rewrite it in place.
  */
 #include <IOKit/IOKitLib.h>
+#include <IOSurface/IOSurface.h>
 #include <mach/mach.h>
 #include <pthread.h>
 #include <stdint.h>
@@ -127,6 +128,68 @@ test_thread(void *unused)
     kr = call(2, in, 2, out, 1);
     klog("dylib: submit of an unowned VA -> %x (must be an error)", kr);
     ok = ok && kr != KERN_SUCCESS;
+
+    /* Render into a private IOSurface, leaving all compositor-owned surfaces untouched. */
+    int width = 16, height = 16, bpr = width * 4, format = 0x42475241;
+    CFNumberRef nw = CFNumberCreate(kCFAllocatorDefault, kCFNumberIntType, &width);
+    CFNumberRef nh = CFNumberCreate(kCFAllocatorDefault, kCFNumberIntType, &height);
+    CFNumberRef nb = CFNumberCreate(kCFAllocatorDefault, kCFNumberIntType, &bpr);
+    CFNumberRef nf = CFNumberCreate(kCFAllocatorDefault, kCFNumberIntType, &format);
+    CFMutableDictionaryRef props = CFDictionaryCreateMutable(kCFAllocatorDefault, 4,
+        &kCFTypeDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks);
+    if (props && nw && nh && nb && nf) {
+        CFDictionarySetValue(props, kIOSurfaceWidth, nw);
+        CFDictionarySetValue(props, kIOSurfaceHeight, nh);
+        CFDictionarySetValue(props, kIOSurfaceBytesPerRow, nb);
+        CFDictionarySetValue(props, kIOSurfacePixelFormat, nf);
+    }
+    IOSurfaceRef surface = props && nw && nh && nb && nf ? IOSurfaceCreate(props) : NULL;
+    if (surface) {
+        uint32_t sid = IOSurfaceGetID(surface);
+        uint64_t sin[1] = { sid }, sout[7] = { 0 };
+        kr = call(6, sin, 1, sout, 7);
+        klog("dylib: surface import id=%u kr=%x gva=%llx bpr=%llu", sid, kr, sout[0], sout[3]);
+        int mapped = kr == KERN_SUCCESS && sout[0] != 0;
+        int imported = mapped && sout[3] >= 64 &&
+            sout[4] == 16 && sout[5] == 16;
+        kern_return_t lock = imported ? IOSurfaceLock(surface, 0, NULL) : KERN_FAILURE;
+        void *base = lock == KERN_SUCCESS ? IOSurfaceGetBaseAddress(surface) : NULL;
+        if (base != NULL) {
+            memset(base, 0xa5, IOSurfaceGetAllocSize(surface));
+            IOSurfaceUnlock(surface, 0, NULL);
+            uint64_t rin[2] = { sout[0], 0xff0000ffu }, rout[1] = { 0 };
+            kr = call(7, rin, 2, rout, 1);
+            lock = IOSurfaceLock(surface, kIOSurfaceLockReadOnly, NULL);
+            base = lock == KERN_SUCCESS ? IOSurfaceGetBaseAddress(surface) : NULL;
+            const size_t stride = IOSurfaceGetBytesPerRow(surface);
+            unsigned rendered = 0;
+            for (unsigned y = 0; base && y < 16; y++) {
+                const uint32_t *row = (const uint32_t *)((const uint8_t *)base + y * stride);
+                for (unsigned x = 0; x < 16; x++) { rendered += row[x] == 0xff0000ffu; }
+            }
+            if (lock == KERN_SUCCESS) IOSurfaceUnlock(surface, kIOSurfaceLockReadOnly, NULL);
+            klog("dylib: Mali IOSurface render kr=%x seq=%llu pixels=%u/256", kr, rout[0], rendered);
+            ok = ok && kr == KERN_SUCCESS && rendered == 256;
+        } else {
+            if (lock == KERN_SUCCESS) IOSurfaceUnlock(surface, 0, NULL);
+            klog("dylib: IOSurface import/render setup failed");
+            ok = 0;
+        }
+        if (mapped) {
+            uint64_t uin[1] = { sout[0] };
+            (void)call(1, uin, 1, NULL, 0);
+        }
+        CFRelease(surface);
+    } else {
+        klog("dylib: IOSurfaceCreate failed");
+        ok = 0;
+    }
+    if (props) CFRelease(props);
+    if (nw) CFRelease(nw);
+    if (nh) CFRelease(nh);
+    if (nb) CFRelease(nb);
+    if (nf) CFRelease(nf);
+
     in[0] = gva;
     kr = call(1, in, 1, out, 0);
     klog("dylib: unmap kr=%x", kr);
