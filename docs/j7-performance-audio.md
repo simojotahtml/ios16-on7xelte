@@ -12,6 +12,16 @@ a candidate, not a measured speedup. `tools/j7-bootargs.py` makes the change
 reproducible and recalculates the Android image digest. Keep `boot.img` as the
 rollback image and compare boot/UI behavior on-device.
 
+`boot-cpu-baseline.img` is a separate comparison image derived from
+`boot-performance.img`. It removes `j7gpu=7` and the injected `sweetgl.dylib`
+self-test while keeping the eight-CPU, eMMC, root, and display arguments. The
+current lockscreen uses software rendering, so the always-powered Mali service
+has no composition work to do in this build. Comparing this image against
+`boot-performance.img` can show whether keeping the unused GPU service active
+affects thermals or responsiveness. No device is attached and no speedup is
+claimed. This image also disables the current GPU client diagnostic; use the
+original `boot-performance.img` to continue GPU bring-up.
+
 Patch `0314` reuses the existing row-band framebuffer copier for the J7 and
 chooses up to three helper threads from XNU's active CPU count. It uses one
 helper with two active CPUs and three with all eight; `sweetfb_copythreads=0`
