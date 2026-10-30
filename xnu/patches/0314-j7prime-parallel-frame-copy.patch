@@ -1,18 +1,21 @@
 From: j7 performance
-Subject: j7prime: split framebuffer copies across one helper CPU
+Subject: j7prime: scale framebuffer copy workers to active CPUs
 
 The lockscreen currently reaches scanout through the CPU framebuffer path. Reuse
-the row-band copier from the HEROLTE port on A5XELTE builds, defaulting to one
-helper thread for the J7's two-core bring-up profile. sweetfb_copythreads=0
-keeps the serial memcpy path; values above one remain available for later
-multi-core measurements. This speeds only the final framebuffer copy, not
+the row-band copier from the HEROLTE port on A5XELTE builds, choosing up to three
+helper threads from the CPUs XNU actually brought online. That gives one helper
+on a two-CPU boot and up to three on the J7's eight-CPU profile.
+sweetfb_copythreads=0 keeps the serial memcpy path; an explicit positive value
+can override the automatic count. This speeds only the final framebuffer copy, not
 CoreAnimation's software rendering, and remains a candidate until measured on
 the phone.
 
 diff --git a/iokit/Kernel/arm/SweetFramebuffer.cpp b/iokit/Kernel/arm/SweetFramebuffer.cpp
 --- a/iokit/Kernel/arm/SweetFramebuffer.cpp
 +++ b/iokit/Kernel/arm/SweetFramebuffer.cpp
-@@ -54,5 +54,5 @@
+@@ -53,6 +53,7 @@
+ #include <kern/thread.h>
++#include <machine/machine_routines.h>
  #include <sys/proc.h>
  
 -#if defined(ARM64_BOARD_CONFIG_HEROLTE)
@@ -37,11 +40,11 @@ diff --git a/iokit/Kernel/arm/SweetFramebuffer.cpp b/iokit/Kernel/arm/SweetFrame
 @@ -477,3 +477,7 @@ sweet_fb_copy_init(void)
  {
 -	uint32_t helpers = 3;
-+#if defined(ARM64_BOARD_CONFIG_A5XELTE)
-+	uint32_t helpers = 1;
-+#else
-+	uint32_t helpers = 3;
-+#endif
++	uint32_t cpu_count = ml_get_cpu_count();
++	uint32_t helpers = cpu_count > 1 ? cpu_count - 1 : 0;
++	if (helpers > 3) {
++		helpers = 3;
++	}
  	PE_parse_boot_argn("sweetfb_copythreads", &helpers, sizeof(helpers));
 @@ -698,5 +698,5 @@ AppleCLCD::present(const uint8_t *rec)
  		} else if (src != 0 && bpe == 4) {

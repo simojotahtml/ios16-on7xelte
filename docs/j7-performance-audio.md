@@ -13,10 +13,11 @@ reproducible and recalculates the Android image digest. Keep `boot.img` as the
 rollback image and compare boot/UI behavior on-device.
 
 Patch `0314` reuses the existing row-band framebuffer copier for the J7 and
-starts one helper thread by default. `sweetfb_copythreads=0` selects the serial
-copy path; larger values can be tried after the J7 CPU topology is confirmed.
-This may shorten the final copy into scanout memory, but cannot make
-CoreAnimation's CPU rendering faster. It is not built or measured on the phone.
+chooses up to three helper threads from XNU's active CPU count. It uses one
+helper with two active CPUs and three with all eight; `sweetfb_copythreads=0`
+selects the serial path. This may shorten the final copy into scanout memory,
+but cannot make CoreAnimation's CPU rendering faster. It is not built or
+measured on the phone.
 
 ## GPU status
 
