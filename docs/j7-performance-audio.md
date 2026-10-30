@@ -51,3 +51,24 @@ backend cannot drive this Samsung codec. A real J7 port needs the I2C/regulator/
 GPIO setup, I2S clocks and ADMA, then an XNU audio-facing device and a HAL that
 exposes playback/capture. Until those layers are present, audio remains
 unsupported; a silent placeholder would not make sound work.
+
+## Concrete playback bring-up sequence
+
+The codec supply is **not** declared `regulator-always-on` or `regulator-boot-on`
+in the J7 DTS. Linux enables S2MPU05 LDO25 before codec use. The PMIC sits at
+I²C address `0x66` on HSI2C0 (`0x10510000`, pins GPM0-1/0); LDO25 control is
+register `0x47`, with voltage selector in bits 5:0 and operating mode in bits
+7:6. The codec is a separate device on S3C2440 I2C0 (`0x13870000`, pins
+GPC1-1/0). XNU needs a serialized PMIC/I2C owner before it can safely enable
+that rail; writing codec registers before that is likely to get no ACK.
+
+For 48 kHz playback, the Linux machine driver selects I²S, normal bit/frame
+clock polarity, CPU-master clocks, `RFS=512`, and `BFS=64` for 24-bit codec
+samples. The codec uses register `0x41` for I²S format and 24-bit word length.
+LPASS at `0x148F0000` gates the audio clocks and resets ADMA/I2S through
+`DISPAUD_CFG` offset `0x1000` (ADMA reset bit 3, I2S reset bit 1); Linux requests
+98.304 MHz audio PLL and about 110 MHz MI2S source clocks. ADMA request 0 is
+I2S0 playback; the CPU I2S block is `0x148A0000`. These facts define the
+first native XNU milestone: enable the rail, prove codec ACK/status, then
+stream a bounded tone with DMA before attaching the existing HackiOS CoreAudio
+plug-in interface. The sequence has not been implemented or hardware-tested.
