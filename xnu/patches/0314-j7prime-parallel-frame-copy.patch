@@ -1,0 +1,52 @@
+From: j7 performance
+Subject: j7prime: split framebuffer copies across one helper CPU
+
+The lockscreen currently reaches scanout through the CPU framebuffer path. Reuse
+the row-band copier from the HEROLTE port on A5XELTE builds, defaulting to one
+helper thread for the J7's two-core bring-up profile. sweetfb_copythreads=0
+keeps the serial memcpy path; values above one remain available for later
+multi-core measurements. This speeds only the final framebuffer copy, not
+CoreAnimation's software rendering, and remains a candidate until measured on
+the phone.
+
+diff --git a/iokit/Kernel/arm/SweetFramebuffer.cpp b/iokit/Kernel/arm/SweetFramebuffer.cpp
+--- a/iokit/Kernel/arm/SweetFramebuffer.cpp
++++ b/iokit/Kernel/arm/SweetFramebuffer.cpp
+@@ -54,7 +54,7 @@
+ #include <sys/proc.h>
+ 
+-#if defined(ARM64_BOARD_CONFIG_HEROLTE)
++#if defined(ARM64_BOARD_CONFIG_HEROLTE) || defined(ARM64_BOARD_CONFIG_A5XELTE)
+ static void sweet_fb_copy_init(void);
+ #endif
+@@ -272,7 +272,7 @@ AppleCLCD::start(IOService *provider)
+ 	fFlushTicks = (hz == 0 || hz >= 60) ? 1 : 60 / hz;
+ #endif
+-#if defined(ARM64_BOARD_CONFIG_HEROLTE)
++#if defined(ARM64_BOARD_CONFIG_HEROLTE) || defined(ARM64_BOARD_CONFIG_A5XELTE)
+ 	sweet_fb_copy_init();
+ #endif
+ 	fVsync->setTimeoutUS(SWEET_FB_VSYNC_US);
+@@ -411,7 +411,7 @@ static uint32_t sweet_fb_swaps_logged;
+ static uint64_t sweet_fb_swap_count;
+ 
+-#if defined(ARM64_BOARD_CONFIG_HEROLTE)
++#if defined(ARM64_BOARD_CONFIG_HEROLTE) || defined(ARM64_BOARD_CONFIG_A5XELTE)
+ /*
+  * A full 1440x2560 frame is 14.7 MB into write-combined memory: 10-20 ms
+@@ -477,7 +477,11 @@ sweet_fb_copy_init(void)
+ {
+-	uint32_t helpers = 3;
++#if defined(ARM64_BOARD_CONFIG_A5XELTE)
++	uint32_t helpers = 1;
++#else
++	uint32_t helpers = 3;
++#endif
+ 	PE_parse_boot_argn("sweetfb_copythreads", &helpers, sizeof(helpers));
+@@ -698,7 +702,7 @@ AppleCLCD::present(const uint8_t *rec)
+ 		} else if (src != 0 && bpe == 4) {
+ 			copied += (uint64_t)w * (uint64_t)h * 4;
+-#if defined(ARM64_BOARD_CONFIG_HEROLTE)
++#if defined(ARM64_BOARD_CONFIG_HEROLTE) || defined(ARM64_BOARD_CONFIG_A5XELTE)
+ 			sweet_fb_copy_rows(fPixels + (uint64_t)dy * fRowBytes + (uint64_t)dx * 4, fRowBytes,
+ 			    src + s->offset + (uint64_t)sy * s->bytesPerRow + (uint64_t)sx * 4, s->bytesPerRow,
