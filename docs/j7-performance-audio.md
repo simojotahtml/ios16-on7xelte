@@ -39,6 +39,10 @@ Metal renderer. The root's `/usr/lib/sweetgl.dylib` is therefore not a graphics
 driver, and the GPU is not yet connected to CoreAnimation/IOSurface presentation.
 Real acceleration still requires a user-space rendering implementation and a
 presentation/fence path, followed by on-device rendered-pixel validation.
+Patch `0315` adds a candidate selector for importing SWEET IOSurface storage
+into Mali AS0. This lets a future Panfrost winsys target an existing surface
+without a copy; the Mesa winsys and CoreAnimation route are still missing, and
+the patch has not been built or flashed.
 
 ## Audio hardware findings
 

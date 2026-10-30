@@ -1,0 +1,97 @@
+From: j7 g3d
+Subject: j7prime: import SWEET IOSurface storage into Mali AS0
+
+Extend the J7MaliUserClient with a surface import operation. The client holds a
+retained SweetSurface and a subdescriptor for its pixel allocation while Mali
+maps those physical pages in AS0. The returned GPU VA plus IOSurface geometry
+is enough for a Panfrost winsys to build a surface resource without copying its
+pixels into a second BO. Selector 1 releases the mapping and the retained
+surface. The operation is serialized with the existing single-AS job path and
+uses its existing cache-maintenance calls at submit/wait.
+
+This is only the kernel import boundary. It does not implement the Mesa
+Panfrost winsys or connect CoreAnimation to GLES/Metal.
+
+diff --git a/iokit/Kernel/arm/A5XELTEGPU.cpp b/iokit/Kernel/arm/A5XELTEGPU.cpp
+--- a/iokit/Kernel/arm/A5XELTEGPU.cpp
++++ b/iokit/Kernel/arm/A5XELTEGPU.cpp
+@@ -19,5 +21,7 @@
+ #include <IOKit/IOLocks.h>
+ #include <IOKit/IOMemoryDescriptor.h>
++#include <IOKit/IOSubMemoryDescriptor.h>
++#include "SweetSurface.h"
+ #include <pexpert/pexpert.h>
+ #include <vm/memory_types.h>
+ #include <arm/memory_types.h>
+@@ -316,4 +318,5 @@
+     uint64_t va;
+     uint64_t start;                 /* va + the client's offset into the first page */
+     uint64_t size;
++    SweetSurface *surface;          /* retained for a selector-6 IOSurface import */
+     bool used;
+@@ -581,4 +584,7 @@
+         bo->umd->complete();
+         bo->umd->release();
+     }
++    if (bo->surface) {
++        bo->surface->release();
++    }
+     bzero(bo, sizeof(*bo));
+@@ -1118,5 +1124,57 @@
+             ret = kIOReturnSuccess;
+         }
+         break;
++    case 6:     /* import SWEET IOSurface: in id; out GPU VA, size, offset, rowbytes, width, height, format */
++        if (args->scalarInputCount == 1 && args->scalarOutputCount >= 7) {
++            SweetSurface *s = sweet_surface_copy(static_cast<uint32_t>(args->scalarInput[0]));
++            if (s == NULL) {
++                ret = kIOReturnNotFound;
++                break;
++            }
++            const uint64_t size = s->allocSize;
++            if (s->memory == NULL || size == 0 || size > (64ULL << 20) || (size & (J7M_PAGE - 1))) {
++                s->release();
++                ret = kIOReturnBadArgument;
++                break;
++            }
++
++            struct J7MaliBo *bo = NULL;
++            for (unsigned i = 0; i < J7M_MAX_BOS; i++) {
++                if (gJ7M.bos[i].used && gJ7M.bos[i].owner == this && gJ7M.bos[i].surface == s) {
++                    bo = &gJ7M.bos[i];
++                    break;
++                }
++            }
++            if (bo == NULL) {
++                IOMemoryDescriptor *md = IOSubMemoryDescriptor::withSubRange(s->memory, 0, size,
++                    kIODirectionInOut);
++                if (md == NULL) {
++                    s->release();
++                    ret = kIOReturnNoMemory;
++                    break;
++                }
++                bo = j7m_map_user(md, this);
++                if (bo == NULL) {
++                    md->release();
++                    s->release();
++                    ret = kIOReturnNoResources;
++                    break;
++                }
++                bo->surface = s;   /* takes sweet_surface_copy()'s retained reference */
++            } else {
++                s->release();
++            }
++
++            args->scalarOutput[0] = bo->start;
++            args->scalarOutput[1] = bo->size;
++            args->scalarOutput[2] = bo->surface->offset;
++            args->scalarOutput[3] = bo->surface->bytesPerRow;
++            args->scalarOutput[4] = bo->surface->width;
++            args->scalarOutput[5] = bo->surface->height;
++            args->scalarOutput[6] = bo->surface->pixelFormat;
++            args->scalarOutputCount = 7;
++            ret = kIOReturnSuccess;
++        }
++        break;
+     default:
+         break;

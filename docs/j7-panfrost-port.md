@@ -19,13 +19,19 @@ With `j7gpu=7`, `J7MaliUserClient` provides:
 | 2 / 3 | Submit one job chain to a job slot; synchronously wait/recover |
 | 4 | Return GPU ID and core/job/address-space masks |
 | 5 | Send bounded text to the kernel log |
+| 6 (`0315`) | Import a SWEET IOSurface by ID into AS0 and return its GPU VA and geometry |
 
 The service uses one address space and one global in-flight job. Its current
 client self-test submits Mali WRITE_VALUE jobs. Patch `0313` now adds a
 candidate Midgard v5 one-tile fragment clear into a private 16x16 RGBA target
 and counts the resulting pixels. This is a boot-time driver diagnostic, not a
 screen acceleration path; it is not yet XNU-built or hardware-verified. The
-service still does not create CoreSurface-backed buffers or expose DRM ioctls.
+surface-import selector in `0315` pins and maps an existing SWEET IOSurface's
+pixel memory, retaining the surface until selector 1 unmaps it. This gives a
+Panfrost winsys a zero-copy resource path for surfaces it can already access.
+The selector does not expose DRM ioctls, implement buffer allocation/import in
+Mesa, or route CoreAnimation rendering to Mali. Patch `0315` is a code
+candidate; it is not XNU-built or hardware-verified.
 
 ## Mesa compatibility work identified
 
@@ -40,9 +46,11 @@ import/export, eviction, heap-on-fault, and concurrent jobs for this first
 serialized path.
 
 The integration still needs a Mesa winsys entry that talks to
-`J7MaliUserClient`, correct cache ownership around IOSurface buffers, and
-on-device verification that patch `0313` produces all expected pixels. Only
-after that passes should a surface be presented to the Samsung scanout buffer.
+`J7MaliUserClient`, maps/allocates BOs through the surface and memory selectors,
+translates Panfrost's submit/wait path, and preserves cache ownership around
+IOSurface buffers. The next hardware gate is `0313` producing all expected
+pixels, followed by a render into an imported IOSurface and presentation of that
+surface to Samsung scanout.
 
 ## UI limit
 
