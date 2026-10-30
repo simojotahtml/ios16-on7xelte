@@ -1,0 +1,76 @@
+From: J7 Prime bring-up
+Subject: j7prime: fix active-low backlight sleep and wake
+
+The on7xelte panel DT defines GPD3-5 as GPIO_ACTIVE_LOW. Add a J7-only
+backlight helper and call it after the framebuffer fade and on wake. Drive
+the line low for on and high for off.
+
+--- a/iokit/Kernel/arm/SweetFramebuffer.cpp
++++ b/iokit/Kernel/arm/SweetFramebuffer.cpp
+@@ -55,6 +55,8 @@
+ #include <kern/clock.h>
+ #include <kern/thread.h>
+ #include <sys/proc.h>
++#include <machine/machine_routines.h>
++extern vm_offset_t ml_io_map(vm_offset_t, vm_size_t);
+ 
+ #if defined(ARM64_BOARD_CONFIG_HEROLTE)
+ static void sweet_fb_copy_init(void);
+@@ -291,6 +293,37 @@
+ 	return true;
+ }
+ 
++#if defined(ARM64_BOARD_CONFIG_A5XELTE)
++/* Exynos7870 TOP pinctrl: GPD3-5 drives the active-low LCD backlight. */
++static vm_offset_t j7_fb_top_pins;
++
++static void
++j7_fb_backlight(bool enabled)
++{
++	int j7hw = 0;
++	if (!PE_parse_boot_argn("j7hw", &j7hw, sizeof(j7hw)) || !j7hw) {
++		return;
++	}
++	if (j7_fb_top_pins == 0) {
++		j7_fb_top_pins = ml_io_map(0x139b0000u, 0x1000);
++	}
++	if (j7_fb_top_pins == 0) {
++		IOLog("J7 FB: TOP pinctrl map failed; backlight unchanged\n");
++		return;
++	}
++	volatile uint32_t *con = (volatile uint32_t *)(j7_fb_top_pins + 0x140);
++	volatile uint32_t *dat = (volatile uint32_t *)(j7_fb_top_pins + 0x144);
++	uint32_t c = *con;
++	uint32_t d = *dat;
++	c = (c & ~(0xfu << 20)) | (1u << 20); /* GPD3-5 output */
++	d = enabled ? (d & ~(1u << 5)) : (d | (1u << 5));
++	*con = c;
++	__asm__ volatile("dmb oshst" ::: "memory");
++	*dat = d;
++	__asm__ volatile("dmb oshst" ::: "memory");
++}
++#endif
++
+ void
+ AppleCLCD::vsyncFired(OSObject *owner, IOTimerEventSource *sender)
+ {
+@@ -323,6 +356,9 @@
+ 					row[x] = step < 6 ? (row[x] >> 1) & 0x7f7f7f7f : 0;
+ 				}
+ 			}
++#if defined(ARM64_BOARD_CONFIG_A5XELTE)
++			if (step == 6) j7_fb_backlight(false);
++#endif
+ 		}
+ 		sender->setTimeoutUS(SWEET_FB_VSYNC_US);
+ 		return;
+@@ -873,6 +909,9 @@
+ 				fFB->fDirty = true;     /* on: redraw the latest frame */
+ 			}
+ 			IOLockUnlock(fFB->fLock);
++#if defined(ARM64_BOARD_CONFIG_A5XELTE)
++			if (!off) j7_fb_backlight(true);
++#endif
+ 			IOLog("SWEET FB: display %s\n", off ? "off" : "on");
+ 		}
+ 		break;
