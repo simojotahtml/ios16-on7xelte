@@ -1,0 +1,70 @@
+From: j7 display
+Subject: j7prime: switch off LCD backlight on display sleep
+
+The generic framebuffer power path only darkens the pixel buffer. The
+on7xelte board has an active-high LCD backlight enable on GPD3-5. Keep the
+brief framebuffer fade, then drop that enable; restore it on display wake.
+Only touch this GPIO when the J7 board boot argument is active.
+
+diff --git a/iokit/Kernel/arm/SweetFramebuffer.cpp b/iokit/Kernel/arm/SweetFramebuffer.cpp
+--- a/iokit/Kernel/arm/SweetFramebuffer.cpp
++++ b/iokit/Kernel/arm/SweetFramebuffer.cpp
+@@ -45,2 +45,4 @@
+ #include <kern/clock.h>
+ #include <sys/proc.h>
++#include <machine/machine_routines.h>
++extern vm_offset_t ml_io_map(vm_offset_t, vm_size_t);
+@@ -216,6 +216,9 @@ AppleCLCD::vsyncFired(OSObject *owner, IOTimerEventSource *sender)
+ 					row[x] = step < 6 ? (row[x] >> 1) & 0x7f7f7f7f : 0;
+ 				}
+ 			}
++#if defined(ARM64_BOARD_CONFIG_A5XELTE)
++			if (step == 6) j7_fb_backlight(false);
++#endif
+ 		}
+ 		sender->setTimeoutUS(SWEET_FB_VSYNC_US);
+ 		return;
+@@ -240,5 +240,36 @@ static uint32_t sweet_fb_swaps_logged;
+ 
++#if defined(ARM64_BOARD_CONFIG_A5XELTE)
++/* TOP pinctrl: GPD3 begins at +0x140; LCD_BL_EN is active-high GPD3-5. */
++static vm_offset_t j7_fb_top_pins;
++
++static void
++j7_fb_backlight(bool enabled)
++{
++	int j7hw = 0;
++	if (!PE_parse_boot_argn("j7hw", &j7hw, sizeof(j7hw)) || !j7hw) {
++		return;
++	}
++	if (j7_fb_top_pins == 0) {
++		j7_fb_top_pins = ml_io_map(0x139b0000u, 0x1000);
++	}
++	if (j7_fb_top_pins == 0) {
++		IOLog("J7 FB: TOP pinctrl map failed; backlight unchanged\n");
++		return;
++	}
++	volatile uint32_t *con = (volatile uint32_t *)(j7_fb_top_pins + 0x140);
++	volatile uint32_t *dat = (volatile uint32_t *)(j7_fb_top_pins + 0x144);
++	uint32_t c = *con;
++	uint32_t d = *dat;
++	c = (c & ~(0xfu << 20)) | (1u << 20); /* GPD3-5 output */
++	d = enabled ? (d | (1u << 5)) : (d & ~(1u << 5));
++	*con = c;
++	__asm__ volatile("dmb oshst" ::: "memory");
++	*dat = d;
++	__asm__ volatile("dmb oshst" ::: "memory");
++}
++#endif
++
+ void
+ AppleCLCD::swap(const uint8_t *rec)
+ {
+ 	uint32_t mask = get32(rec, 0x104);
+@@ -555,3 +555,6 @@ IOMobileFramebufferUserClient::externalMethod(uint32_t selector, IOExternalMethodArguments *args,
+ 		if (args->scalarInputCount >= 1) {
+ 			bool off = args->scalarInput[0] == 0;
++#if defined(ARM64_BOARD_CONFIG_A5XELTE)
++			if (!off) j7_fb_backlight(true);
++#endif
+ 			IOLockLock(fFB->fLock);
