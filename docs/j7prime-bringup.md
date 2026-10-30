@@ -40,6 +40,10 @@ the second cluster (CPU_ON target 0x100..) is the suspect: report the `CPU_ON rc
 0305 adds multi-block eMMC reads, off unless the boot args contain `emmcfast=1`; try it after cores work.
 Do not expect miracles from either: the UI is still software-rendered on the CPU (no GPU), so cores help most.
 
+## Lower-resolution software-rendering mode (patch 0316)
+
+After building a kernel with patch 0316, append `j7fb_scale=1` to the existing XNU boot arguments. The display service reports 720x1280 and scales the image to the J7 panel's 1080x1920; this reduces CoreAnimation's pixel workload to 4/9 of native size. Touch coordinates stay normalized to the physical panel. Remove the argument to return to native logical resolution. This is opt-in and not yet built or measured on hardware.
+
 ## GPU bring-up stages (boot-arg j7gpu=N, Mali-T830 MP1)
 1 publish resources only; 2 also read PMU G3D status + CMU+000; 3 also read GPU_ID and the Midgard identity
 registers (confirmed on hardware: GPU_ID 08300010, 3 job slots, 8 address spaces, shader/tiler/L2 mask 1);

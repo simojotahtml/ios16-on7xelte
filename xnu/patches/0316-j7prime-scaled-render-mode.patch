@@ -1,0 +1,48 @@
+From: j7 performance
+Subject: j7prime: add opt-in reduced-resolution UI rendering
+
+The iOS UI currently renders at the panel's 1080x1920 logical size and the
+CPU path copies every presented surface to scanout. Add j7fb_scale=1 to report
+a 720x1280 logical display and use the existing nearest-neighbour 1.5x scanout
+scaler. This reduces the UI render workload to 4/9 of the current pixel count.
+Keep the default unchanged; touch events remain normalized to the physical panel.
+
+diff --git a/iokit/Kernel/arm/SweetFramebuffer.cpp b/iokit/Kernel/arm/SweetFramebuffer.cpp
+--- a/iokit/Kernel/arm/SweetFramebuffer.cpp
++++ b/iokit/Kernel/arm/SweetFramebuffer.cpp
+@@ -224,3 +224,11 @@
+ #endif
++#if defined(ARM64_BOARD_CONFIG_A5XELTE)
++	int j7_scale = 0;
++	if (PE_parse_boot_argn("j7fb_scale", &j7_scale, sizeof(j7_scale)) && j7_scale) {
++		fScaled = true;
++		fLogicalW = fWidth * 2 / 3;
++		fLogicalH = fHeight * 2 / 3;
++	}
++#endif
+ 	fOffX = fScaled ? 0 : (int32_t)(fLogicalW - fWidth) / 2;
+ 	fOffY = fScaled ? 0 : (int32_t)(fLogicalH - fHeight) / 2;
+diff --git a/iokit/Kernel/arm/hid/SweetHID.cpp b/iokit/Kernel/arm/hid/SweetHID.cpp
+--- a/iokit/Kernel/arm/hid/SweetHID.cpp
++++ b/iokit/Kernel/arm/hid/SweetHID.cpp
+@@ -441,5 +441,10 @@ SweetHIDTouch::start(IOService *provider)
+ #elif defined(ARM64_BOARD_CONFIG_A5XELTE)
+ 	fPanelW = fLogicalW = 1080;
+ 	fPanelH = fLogicalH = 1920;
++	int j7_scale = 0;
++	if (PE_parse_boot_argn("j7fb_scale", &j7_scale, sizeof(j7_scale)) && j7_scale) {
++		fLogicalW = fPanelW * 2 / 3;
++		fLogicalH = fPanelH * 2 / 3;
++	}
+ #else
+ 	fPanelW = 1080;
+@@ -452,2 +458,7 @@ SweetHIDTouch::touch(int finger, bool down, int x, int y)
+-	IOFixed nx = (IOFixed)(((int64_t)(x + fOffX) << 16) / fLogicalW);
+-	IOFixed ny = (IOFixed)(((int64_t)(y + fOffY) << 16) / fLogicalH);
++#if defined(ARM64_BOARD_CONFIG_A5XELTE)
++	IOFixed nx = (IOFixed)(((int64_t)x << 16) / fPanelW);
++	IOFixed ny = (IOFixed)(((int64_t)y << 16) / fPanelH);
++#else
++	IOFixed nx = (IOFixed)(((int64_t)(x + fOffX) << 16) / fLogicalW);
++	IOFixed ny = (IOFixed)(((int64_t)(y + fOffY) << 16) / fLogicalH);
++#endif

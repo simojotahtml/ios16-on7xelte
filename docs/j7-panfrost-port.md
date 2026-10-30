@@ -62,7 +62,7 @@ requires an iOS graphics ABI bridge or proof that the target's renderer uses a
 hookable GLES path. A Mali job test or faster framebuffer copy alone is not
 evidence that the lock screen is GPU-rendered.
 
-Patch `0314` is a separate CPU-side experiment: it reuses the HEROLTE row-band
+Patch `0316` adds opt-in `j7fb_scale=1`, rendering at 720x1280 and scaling to the panel; this reduces the software UI render area to 4/9, at some sharpness cost. It is not built or hardware-measured. Patch `0314` is a separate CPU-side experiment: it reuses the HEROLTE row-band
 copy worker for J7 scanout, scaling up to seven helpers according to XNU's
 active CPU count. It may reduce the final presentation copy cost, but leaves
 the software renderer intact and has not been built or measured on the phone.
