@@ -1,0 +1,21 @@
+diff --git a/bsd/dev/a5xelte_touch.c b/bsd/dev/a5xelte_touch.c
+index 0000000..0000001 100644
+--- a/bsd/dev/a5xelte_touch.c
++++ b/bsd/dev/a5xelte_touch.c
+@@ -159,6 +159,13 @@
+ void
+ a5xelte_touch_probe(void)
+ {
+ 	int enabled = 1;
+ 	(void)PE_parse_boot_argn("a5touchprobe", &enabled, sizeof(enabled));
+ 	if (!enabled) {
+ 		return;
+ 	}
++	{
++		int j7hw = 0;
++		(void)PE_parse_boot_argn("j7hw", &j7hw, sizeof(j7hw));
++		if (j7hw) {
++			printf("A5XELTE TOUCH: skipped (j7hw=1)\n");
++			return;
++		}
++	}
