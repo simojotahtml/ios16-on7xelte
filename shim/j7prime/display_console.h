@@ -6,5 +6,6 @@
 
 /* Bounded Exynos7580 display handoff. Diagnostics occupy log[64..95]. */
 int a5_display_console_start(volatile uint64_t *log);
+void j7_display_charging(int percent, int power_mw, int charger_detected);
 
 #endif

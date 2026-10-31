@@ -1,0 +1,24 @@
+From: J7 Prime bring-up
+Subject: j7prime: respect active-low LCD backlight enable
+
+The on7xelte panel DTS declares GPD3-5 as GPIO_ACTIVE_LOW. Drive the pin
+low to illuminate the panel and high to switch the backlight off. The
+previous 0319 polarity was reversed, which left the backlight dark on wake.
+
+diff --git a/iokit/Kernel/arm/SweetFramebuffer.cpp b/iokit/Kernel/arm/SweetFramebuffer.cpp
+--- a/iokit/Kernel/arm/SweetFramebuffer.cpp
++++ b/iokit/Kernel/arm/SweetFramebuffer.cpp
+@@ -241,1 +241,1 @@
+-/* TOP pinctrl: GPD3 begins at +0x140; LCD_BL_EN is active-high GPD3-5. */
++/* TOP pinctrl: GPD3 begins at +0x140; LCD_BL_EN is active-low GPD3-5. */
+@@ -270,9 +270,9 @@ j7_fb_backlight(bool enabled)
+ 	volatile uint32_t *con = (volatile uint32_t *)(j7_fb_top_pins + 0x140);
+ 	volatile uint32_t *dat = (volatile uint32_t *)(j7_fb_top_pins + 0x144);
+ 	uint32_t c = *con;
+ 	uint32_t d = *dat;
+ 	c = (c & ~(0xfu << 20)) | (1u << 20); /* GPD3-5 output */
+-	d = enabled ? (d | (1u << 5)) : (d & ~(1u << 5));
++	d = enabled ? (d & ~(1u << 5)) : (d | (1u << 5));
+ 	*con = c;
+ 	__asm__ volatile("dmb oshst" ::: "memory");
+ 	*dat = d;

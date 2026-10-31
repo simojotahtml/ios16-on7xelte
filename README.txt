@@ -7,7 +7,7 @@ Files in this overlay are intended to be copied over the matching paths in the r
 - tools/mkembeddedkernel.py (new)
 
 The change moves the SWEETXNU payload out of Android's ramdisk field and embeds it in the ARM64
-kernel image at offset 0x2000. The ramdisk field is then the small 0x77-byte placeholder already
+kernel image at offset 0x4000. The ramdisk field is then the small 0x77-byte placeholder already
 used by tools/mkj7img.py. This targets the reported S-Boot error "Invalid RAMDISK LENG...".
 
 This is an experimental packaging fix, not a confirmed boot fix. It assumes S-Boot loads the kernel

@@ -5,6 +5,7 @@
 #include <stdint.h>
 #include "../fdt.h"
 #include "display_console.h"
+#include "charging.h"
 
 #define LOG_BASE 0x47041000UL   /* last page of the sec_avc_log area (bootargs) */
 #define RAM_BASE 0x80000000UL
@@ -97,7 +98,7 @@ static uintptr_t align_page(uintptr_t value)
 /* Returns entry PA or zero. Status is kept in reserved RAM for TWRP. */
 uintptr_t a5_prepare_xnu(uintptr_t fdt, volatile uint64_t *log, uintptr_t embedded)
 {
-    (void)fdt; /* The payload no longer depends on S-Boot's initrd FDT properties. */
+	j7_charging_screen(fdt); /* Charger mode stays here until Power is held. */
     log[10] = (uint64_t)-1;
     if (!embedded || embedded > RAM_END - sizeof(struct embedded_header))
         return 0;

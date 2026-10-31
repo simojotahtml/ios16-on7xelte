@@ -10,13 +10,15 @@ CFLAGS="-c -O2 -ffreestanding -fno-builtin -fno-stack-protector -fno-pic -fno-pi
 "${CC}" $CFLAGS xnu_boot.S -o outxnu/xnu_boot.o
 "${CC}" $CFLAGS xnu_boot.c -o outxnu/xnu_boot_c.o
 "${CC}" $CFLAGS display_console.c -o outxnu/display_console.o
+"${CC}" $CFLAGS charging.c -o outxnu/charging.o
 "${CC}" $CFLAGS ../fdt.c -o outxnu/fdt.o
-"${LD}" -static -T xnu_boot.ld --build-id=none outxnu/xnu_boot.o outxnu/xnu_boot_c.o outxnu/display_console.o outxnu/fdt.o -o outxnu/xnu_boot.elf
+"${LD}" -static -T xnu_boot.ld --build-id=none outxnu/xnu_boot.o outxnu/xnu_boot_c.o outxnu/display_console.o outxnu/charging.o outxnu/fdt.o -o outxnu/xnu_boot.elf
 "${OBJCOPY}" -O binary outxnu/xnu_boot.elf outxnu/Image
 python3 - <<'PY'
 from pathlib import Path
 import struct
 p = Path('outxnu/Image').read_bytes()
+assert len(p) <= 0x4000, f'loader ({len(p)} bytes) overlaps embedded payload offset 0x4000'
 assert p[56:60] == b'ARMd'
 assert struct.unpack_from('<Q', p, 8)[0] == 0
 assert struct.unpack_from('<Q', p, 16)[0] > len(p)

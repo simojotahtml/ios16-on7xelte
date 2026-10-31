@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Embed a SWEETXNU payload in the Samsung J7 Prime ARM64 Image.
 
-The loader expects a 16-byte J7XNPAY1 wrapper at kernel offset 0x2000,
+The loader expects a 16-byte J7XNPAY1 wrapper at kernel offset 0x4000,
 followed by the mkpayload.py output. The ARM64 Image image_size field is
 updated so it describes the complete embedded image plus 64 KiB headroom.
 """
@@ -9,7 +9,7 @@ import argparse
 import struct
 from pathlib import Path
 
-OFFSET = 0x2000
+OFFSET = 0x4000
 MAGIC = b"J7XNPAY1"
 HEADROOM = 0x10000
 

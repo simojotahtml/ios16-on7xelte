@@ -1,0 +1,73 @@
+From: J7 GPU bring-up
+Subject: j7prime: expose named Mali feature registers to Panfrost
+
+Panfrost's Midgard device setup queries the GPU feature block through GET_PARAM.
+Extend selector 4 without changing its existing zero-input info call: one scalar
+input now selects a read-only feature value. Only documented feature registers
+inside the known 0x5000-byte T830 aperture are read; this path does not scan or
+write MMIO. Values use the Panfrost DRM enum order from panfrost_drm.h.
+
+diff --git a/iokit/Kernel/arm/A5XELTEGPU.cpp b/iokit/Kernel/arm/A5XELTEGPU.cpp
+--- a/iokit/Kernel/arm/A5XELTEGPU.cpp
++++ b/iokit/Kernel/arm/A5XELTEGPU.cpp
+@@ -1149,15 +1149,67 @@ J7MaliUserClient::externalMethod(uint32_t selector, IOExternalMethodArguments *args,
+     case 4:     /* info: out (gpu id, shader/tiler/L2 present, JS present, AS present) */
+-        if (args->scalarOutputCount >= 6) {
++        if (args->scalarInputCount == 1 && args->scalarOutputCount >= 1) {
++            /* drm-uapi/panfrost_drm.h enum drm_panfrost_param, Mesa 24.3.4. */
++            const uint32_t param = static_cast<uint32_t>(args->scalarInput[0]);
++            uint64_t value = 0;
++            uint32_t reg = 0xffffffffu;
++            switch (param) {
++            case 0: value = gJ7MGpuId >> 16; break;       /* GPU_PROD_ID */
++            case 1: value = gJ7MGpuId & 0xffff; break;    /* GPU_REVISION */
++            case 2: value = gJ7MShaderPresent; break;
++            case 3: value = gJ7MTilerPresent; break;
++            case 4: value = gJ7ML2Present; break;
++            case 5: value = static_cast<uint64_t>(a5g3d_read32(gJ7M.gpu, 0xe00)) |
++                    (static_cast<uint64_t>(a5g3d_read32(gJ7M.gpu, 0xe04)) << 32); break;
++            case 6: reg = 0x018; break;                    /* AS_PRESENT */
++            case 7: reg = 0x01c; break;                    /* JS_PRESENT */
++            case 8: reg = 0x004; break;                    /* L2_FEATURES */
++            case 9: reg = 0x008; break;                    /* CORE_FEATURES */
++            case 10: reg = 0x00c; break;                   /* TILER_FEATURES */
++            case 11: reg = 0x010; break;                   /* MEM_FEATURES */
++            case 12: reg = 0x014; break;                   /* MMU_FEATURES */
++            case 13: reg = 0x0ac; break;                   /* THREAD_FEATURES */
++            case 14: reg = 0x0a0; break;                   /* MAX_THREADS */
++            case 15: reg = 0x0a4; break;                   /* THREAD_MAX_WORKGROUP_SZ */
++            case 16: reg = 0x0a8; break;                   /* THREAD_MAX_BARRIER_SZ */
++            case 17: value = 1; break;                    /* ACE_LITE fallback on Midgard */
++            case 18: case 19: case 20: case 21:
++                reg = 0x0b0 + 4 * (param - 18); break;     /* TEXTURE_FEATURES[0..3] */
++            case 22: case 23: case 24: case 25:
++            case 26: case 27: case 28: case 29:
++            case 30: case 31: case 32: case 33:
++            case 34: case 35: case 36: case 37:
++                reg = 0x0c0 + 4 * (param - 22); break;     /* JS_FEATURES[0..15] */
++            case 38: value = __builtin_popcountll(gJ7ML2Present); break; /* NR_CORE_GROUPS */
++            case 39: reg = 0x310; break;                   /* THREAD_TLS_ALLOC */
++            case 40: value = 0; break;                     /* no Midgard AFBC */
++            default:
++                ret = kIOReturnUnsupported;
++                break;
++            }
++            if (reg != 0xffffffffu) {
++                value = a5g3d_read32(gJ7M.gpu, reg);
++            }
++            if (ret == kIOReturnBadArgument) {
++                args->scalarOutput[0] = value;
++                args->scalarOutputCount = 1;
++                ret = kIOReturnSuccess;
++            }
++        } else if (args->scalarInputCount == 0 && args->scalarOutputCount >= 6) {
+             args->scalarOutput[0] = gJ7MGpuId;
+             args->scalarOutput[1] = gJ7MShaderPresent;
+             args->scalarOutput[2] = gJ7MTilerPresent;
+             args->scalarOutput[3] = gJ7ML2Present;
+             args->scalarOutput[4] = a5g3d_read32(gJ7M.gpu, 0x01c);
+             args->scalarOutput[5] = a5g3d_read32(gJ7M.gpu, 0x018);
+             args->scalarOutputCount = 6;
+             ret = kIOReturnSuccess;
+         }
+         break;

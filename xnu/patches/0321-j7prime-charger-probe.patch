@@ -1,0 +1,237 @@
+diff --git a/bsd/conf/files b/bsd/conf/files
+index 0000000..0000001 100644
+--- a/bsd/conf/files
++++ b/bsd/conf/files
+@@ -106,6 +106,7 @@ bsd/dev/a5xelte_keys.c			standard
+ bsd/dev/a5xelte_touch.c			standard
++bsd/dev/j7prime_charger.c		standard
+ bsd/dev/sweet_sample.c			standard
+ 
+diff --git a/bsd/dev/a5xelte_keys.c b/bsd/dev/a5xelte_keys.c
+index 0000000..0000001 100644
+--- a/bsd/dev/a5xelte_keys.c
++++ b/bsd/dev/a5xelte_keys.c
+@@ -250,6 +250,15 @@ a5xelte_keys_init(void)
+ 		if (j7hw) {
+ 			thread_t thread;
+ 			if (kernel_thread_start(j7k_thread, NULL, &thread) == KERN_SUCCESS) {
+ 				thread_deallocate(thread);
+ 			}
+ 		}
++		/* J7 Prime S2MU005 charger read-only probe (Stage 1). */
++		{
++			int j7charger = 1;
++			(void)PE_parse_boot_argn("j7charger", &j7charger, sizeof(j7charger));
++			if (j7hw && j7charger) {
++				thread_t thread;
++				extern int j7c_init_thread(void);
++				if (kernel_thread_start((thread_continue_t)j7c_init_thread, NULL, &thread) == KERN_SUCCESS) {
++					thread_deallocate(thread);
++				}
++			}
++		}
+ 	}
+ 
+diff --git a/bsd/dev/j7prime_charger.c b/bsd/dev/j7prime_charger.c
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/bsd/dev/j7prime_charger.c
+@@ -0,0 +1,197 @@
++/*
++ * J7 Prime (SM-G610F) S2MU005 charger/fuel-gauge READ-ONLY probe, rev 2.
++ *
++ * Replaces 0321's probe. Changes from rev 1:
++ *  - Real HSI2C transfers (HSI2C_CTL/FIFO/AUTO_CONF/INT/TRANS_STATUS/TX/RX
++ *    offsets from drivers/i2c/busses/i2c-exynos5.c, Samsung 3.18 tree).
++ *    Rev 1 used the old Exynos I2C layout (CON/STAT/DS) and never waited for
++ *    a transfer to finish, so its data was meaningless.
++ *  - Every transfer is bounded by a timeout and reports NACK/abort. A failed
++ *    transfer logs as FAIL, never as a register value.
++ *  - Sanity check: if the controller reads back all-ones or all-zeros the bus
++ *    is not clocked, and the probe stops instead of hanging.
++ *  - Monotonic timestamp from mach_absolute_time().
++ *
++ * Writes: only the HSI2C controller registers and the register-pointer byte
++ * that selects which PMIC register to read. No PMIC/fuel-gauge register is
++ * ever written. Charger watchdog is NOT touched in this revision.
++ */
++
++#include <sys/param.h>
++#include <sys/systm.h>
++#include <mach/mach_types.h>
++#include <kern/thread.h>
++#include <kern/clock.h>
++
++extern vm_offset_t ml_io_map(vm_offset_t, vm_size_t);
++extern void delay(unsigned);              /* microseconds */
++extern uint64_t mach_absolute_time(void);
++
++/* Bus bases from on7xelte DTS: i2c@13870000 holds the S2MU005 PMIC (0x3d),
++ * i2c@13830000 holds the fuel gauge (0x3b). Both are HSI2C controllers. */
++#define J7C_PMIC_PA    0x13870000u
++#define J7C_FG_PA      0x13830000u
++#define J7C_PMIC_ADDR  0x3du
++#define J7C_FG_ADDR    0x3bu
++
++/* HSI2C register map (i2c-exynos5.c). */
++#define HSI2C_CTL          0x00
++#define HSI2C_FIFO_CTL     0x04
++#define HSI2C_TRAILIG_CTL  0x08
++#define HSI2C_INT_ENABLE   0x20
++#define HSI2C_INT_STATUS   0x24
++#define HSI2C_FIFO_STATUS  0x30
++#define HSI2C_TX_DATA      0x34
++#define HSI2C_RX_DATA      0x38
++#define HSI2C_CONF         0x40
++#define HSI2C_AUTO_CONF    0x44
++#define HSI2C_TIMEOUT      0x48
++#define HSI2C_TRANS_STATUS 0x50
++#define HSI2C_ADDR         0x70
++
++#define HSI2C_MASTER          (1u << 3)
++#define HSI2C_RXCHON          (1u << 6)
++#define HSI2C_TXCHON          (1u << 7)
++#define HSI2C_RXFIFO_EN       (1u << 0)
++#define HSI2C_TXFIFO_EN       (1u << 1)
++#define HSI2C_FIFO_TRIG       ((0x8u << 4) | (0x8u << 16))
++#define HSI2C_INT_TRANSFER_DONE (1u << 7)
++#define HSI2C_INT_CHK_STATE   (0xfu << 8)
++#define HSI2C_RX_FIFO_EMPTY   (1u << 24)
++#define HSI2C_TX_FIFO_FULL    (1u << 7)
++#define HSI2C_READ_WRITE      (1u << 16)
++#define HSI2C_STOP_AFTER      (1u << 17)
++#define HSI2C_MASTER_RUN      (1u << 31)
++
++#define J7C_TIMEOUT_US  20000u        /* per transfer, bounded */
++#define J7C_SAMPLES     18            /* 3 min at 10 s */
++
++static vm_offset_t j7c_pmic, j7c_fg;
++
++static inline uint32_t rd(vm_offset_t b, unsigned off) { return *(volatile uint32_t *)(b + off); }
++static inline void     wr(vm_offset_t b, unsigned off, uint32_t v) { *(volatile uint32_t *)(b + off) = v; }
++
++/* Poll until pred is true or the timeout expires. Each step is 10 us. */
++static int wait_for(vm_offset_t b, unsigned off, uint32_t mask, int want_set)
++{
++	for (unsigned t = 0; t < J7C_TIMEOUT_US; t += 10) {
++		uint32_t v = rd(b, off);
++		if (want_set ? (v & mask) : !(v & mask)) return 1;
++		delay(10);
++	}
++	return 0;
++}
++
++/* One HSI2C master transfer. write: send buf; read: fill buf. Returns 0 on success. */
++static int hsi2c_xfer(vm_offset_t b, uint8_t addr, uint8_t *buf, unsigned len, int is_read, int stop)
++{
++	uint32_t ctl = rd(b, HSI2C_CTL);
++	uint32_t ac;
++
++	/* Clear any stale completion/error bits from the previous transfer. */
++	wr(b, HSI2C_INT_STATUS, HSI2C_INT_TRANSFER_DONE | HSI2C_INT_CHK_STATE);
++	wr(b, HSI2C_FIFO_CTL, HSI2C_RXFIFO_EN | HSI2C_TXFIFO_EN | HSI2C_FIFO_TRIG);
++	wr(b, HSI2C_INT_ENABLE, 0);
++
++	ctl &= ~(HSI2C_RXCHON | HSI2C_TXCHON);
++	ctl |= HSI2C_MASTER | (is_read ? HSI2C_RXCHON : HSI2C_TXCHON);
++
++	uint32_t addrreg = rd(b, HSI2C_ADDR);
++	addrreg &= ~((0x3ffu << 10) | 0x3ffu | (0xffu << 24));
++	addrreg |= ((uint32_t)(addr & 0x7f) << 10);
++	wr(b, HSI2C_ADDR, addrreg);
++	wr(b, HSI2C_CTL, ctl);
++
++	ac = rd(b, HSI2C_AUTO_CONF);
++	ac &= ~0xffffu;
++	ac |= len & 0xffffu;
++	if (is_read) ac |= HSI2C_READ_WRITE; else ac &= ~HSI2C_READ_WRITE;
++	if (stop) ac |= HSI2C_STOP_AFTER; else ac &= ~HSI2C_STOP_AFTER;
++	wr(b, HSI2C_AUTO_CONF, ac);
++
++	if (!is_read) {
++		/* Fill TX FIFO before starting. */
++		for (unsigned i = 0; i < len; i++) {
++			if (!wait_for(b, HSI2C_FIFO_STATUS, HSI2C_TX_FIFO_FULL, 0)) return -1;
++			wr(b, HSI2C_TX_DATA, buf[i]);
++		}
++		wr(b, HSI2C_AUTO_CONF, rd(b, HSI2C_AUTO_CONF) | HSI2C_MASTER_RUN);
++	} else {
++		wr(b, HSI2C_AUTO_CONF, rd(b, HSI2C_AUTO_CONF) | HSI2C_MASTER_RUN);
++		for (unsigned i = 0; i < len; i++) {
++			if (!wait_for(b, HSI2C_FIFO_STATUS, HSI2C_RX_FIFO_EMPTY, 0)) return -2;
++			buf[i] = (uint8_t)(rd(b, HSI2C_RX_DATA) & 0xff);
++		}
++	}
++
++	/* Wait for transfer done; any CHK_STATE bit is a NACK/abort/arbitration error. */
++	if (!wait_for(b, HSI2C_INT_STATUS, HSI2C_INT_TRANSFER_DONE, 1)) return -3;
++	uint32_t st = rd(b, HSI2C_INT_STATUS);
++	if (st & HSI2C_INT_CHK_STATE) return -4;
++	wr(b, HSI2C_INT_STATUS, HSI2C_INT_TRANSFER_DONE);
++	return 0;
++}
++
++/* Read one register: pointer write (no stop) then read (stop). */
++static int reg_read(vm_offset_t b, uint8_t dev, uint8_t reg, uint8_t *out, unsigned n)
++{
++	int e = hsi2c_xfer(b, dev, &reg, 1, 0, 0);
++	if (e) return e;
++	return hsi2c_xfer(b, dev, out, n, 1, 1);
++}
++
++static int bus_alive(vm_offset_t b)
++{
++	uint32_t c = rd(b, HSI2C_CTL), cf = rd(b, HSI2C_CONF);
++	if (c == 0xffffffffu || cf == 0xffffffffu) return 0;   /* ungated bus reads all-ones */
++	if (c == 0 && cf == 0) return 0;                        /* not configured by S-Boot */
++	return 1;
++}
++
++static uint64_t j7c_now(void) { return mach_absolute_time(); }
++
++static void log_pmic(void)
++{
++	uint8_t v[8];
++	int e[8];
++	static const uint8_t regs[8] = {0x08, 0x09, 0x0a, 0x0b, 0x0e, 0x1a, 0x1b, 0x2a};
++	for (int i = 0; i < 8; i++) {
++		e[i] = reg_read(j7c_pmic, J7C_PMIC_ADDR, regs[i], &v[i], 1);
++	}
++	uint8_t fg[4] = {0};
++	int fe = reg_read(j7c_fg, J7C_FG_ADDR, 0x04, fg, 2);   /* RVBAT */
++	int fe2 = reg_read(j7c_fg, J7C_FG_ADDR, 0x08, fg + 2, 2); /* RSOC */
++
++	printf("J7 CHG: t=%llu", (unsigned long long)j7c_now());
++	static const char *names[8] = {"STATUS0","STATUS1","STATUS2","STATUS3","CTRL0","CTRL12","CTRL13","REG2A"};
++	for (int i = 0; i < 8; i++) {
++		if (e[i]) printf(" %s=FAIL(%d)", names[i], e[i]);
++		else      printf(" %s=%#02x", names[i], v[i]);
++	}
++	if (fe)  printf(" FG_RVBAT=FAIL(%d)", fe);
++	else     printf(" FG_RVBAT=%u", (unsigned)(fg[0] | (fg[1] << 8)));
++	if (fe2) printf(" FG_RSOC=FAIL(%d)", fe2);
++	else     printf(" FG_RSOC=%u", (unsigned)(fg[2] | (fg[3] << 8)));
++	printf("\n");
++}
++
++int
++j7c_init_thread(void)
++{
++	j7c_pmic = ml_io_map(J7C_PMIC_PA, 0x1000);
++	j7c_fg   = ml_io_map(J7C_FG_PA, 0x1000);
++	if (!j7c_pmic || !j7c_fg) {
++		printf("J7 CHG: MMIO mapping failed\n");
++		return -1;
++	}
++	if (!bus_alive(j7c_pmic)) { printf("J7 CHG: PMIC bus not configured (CTL/CONF invalid), probe aborted\n"); return -2; }
++	if (!bus_alive(j7c_fg))   { printf("J7 CHG: fuel-gauge bus not configured, probe aborted\n"); return -2; }
++
++	printf("J7 CHG: probe start (read-only, rev 2)\n");
++	for (int i = 0; i < J7C_SAMPLES; i++) {
++		log_pmic();
++		delay(10000000);   /* 10 s */
++	}
++	printf("J7 CHG: probe done\n");
++	return 0;
++}
