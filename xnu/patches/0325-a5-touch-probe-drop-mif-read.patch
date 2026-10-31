@@ -1,0 +1,21 @@
+diff --git a/bsd/dev/a5xelte_touch.c b/bsd/dev/a5xelte_touch.c
+index 0000000..0000001 100644
+--- a/bsd/dev/a5xelte_touch.c
++++ b/bsd/dev/a5xelte_touch.c
+@@ -1,10 +1,8 @@
+ 	vm_offset_t mifpins = ml_io_map(0x104e0000, 0x1000);
+ 	vm_offset_t peri = ml_io_map(0x139f0000, 0x1000);
+-	vm_offset_t mif = ml_io_map(0x10430000, 0x1000);
+-	if (!alive || !nfc || !mifpins || !peri || !mif) {
++	if (!alive || !nfc || !mifpins || !peri) {
+ 		printf("A5XELTE TOUCH: probe MMIO mapping failed\n");
+ 		return;
+ 	}
+ 	uint32_t pclk = a5touch_read(peri, 0x904);
+-	uint32_t mifclk = a5touch_read(mif, 0x900);
+-	printf("A5XELTE TOUCH: I2C2 gate=%d MIF HSI2C3 gate=%d GPM0 con=%#x dat=%#x pud=%#x\n",
+-	    !!(pclk & (1u << 9)), !!(mifclk & (1u << 27)),
++	printf("A5XELTE TOUCH: I2C2 gate=%d GPM0 con=%#x dat=%#x pud=%#x\n",
++	    !!(pclk & (1u << 9)),
+ 	    a5touch_read(mifpins, 0), a5touch_read(mifpins, 4),
+ 	    a5touch_read(mifpins, 8));
