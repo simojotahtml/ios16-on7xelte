@@ -20,7 +20,7 @@ index 0000000..0000001 100644
  		}
 +		/* J7 Prime S2MU005 charger read-only probe (Stage 1). */
 +		{
-+			int j7charger = 1;
++			int j7charger = 0;
 +			(void)PE_parse_boot_argn("j7charger", &j7charger, sizeof(j7charger));
 +			if (j7hw && j7charger) {
 +				thread_t thread;
