@@ -88,8 +88,8 @@ jobs:
           from pathlib import Path
           p = Path('out/embedded-kernel.Image').read_bytes()
           assert p[56:60] == b'ARMd'
-          assert p[0x2000:0x2008] == b'J7XNPAY1'
-          payload_len = struct.unpack_from('<Q', p, 0x2008)[0]
+          assert p[0x4000:0x4008] == b'J7XNPAY1'
+          payload_len = struct.unpack_from('<Q', p, 0x4008)[0]
           assert payload_len == len(Path('out/payload.bin').read_bytes())
           assert struct.unpack_from('<Q', p, 16)[0] > len(p)
           assert len(p) < 32 * 1024 * 1024
